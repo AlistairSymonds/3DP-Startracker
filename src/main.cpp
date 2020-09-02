@@ -2,6 +2,8 @@
   
 #include <TMCStepper.h>
 
+#include <Ticker.h>
+
 #define EN_PIN           D2 // Enable
 #define DIR_PIN          D1 // Direction
 #define STEP_PIN         D0 // Step
@@ -18,7 +20,56 @@
 
 TMC2209Stepper driver(&SERIAL_PORT, R_SENSE, DRIVER_ADDRESS);
 
-#define FULL_STEPS_PER_REV 200 * 16 ///200 stepper motor steps * 16:1 gear reduction
+#define USTEPS 256
+#define FULL_STEPS_PER_REV 200 * 16 * USTEPS ///200 stepper motor steps * 16:1 gear reduction
+
+Ticker step_pulse_gen;
+
+bool shaft = false;
+typedef enum {POSEDGE, NEGEDGE}edge_dir_t;
+
+volatile edge_dir_t next_edge_dir = POSEDGE;
+int step_period_us = 80;
+int current_pos = 0;
+int set_pos = 0;
+int shaft_dir = 0;
+
+void step(){
+  if (next_edge_dir == POSEDGE)
+  {
+    digitalWrite(STEP_PIN, HIGH);
+    next_edge_dir = NEGEDGE;
+  } else
+  {
+    digitalWrite(STEP_PIN, LOW);
+    next_edge_dir = POSEDGE;
+  }  
+}
+
+
+void update_motor_pos(){
+  if (current_pos != set_pos) //do a step
+  {
+    int shaft_dir = current_pos < set_pos ? 1 : 0;
+    driver.shaft(shaft_dir);
+    step();
+    if (shaft_dir)
+    {
+      current_pos++;
+    } else
+    {
+      current_pos--;
+    }
+    
+    
+  }
+  
+}
+
+
+void print_stats(){
+  Serial.printf("Set pos: %d Actual Pos: %d\n", set_pos, current_pos);
+}
 
 void setup() {
   pinMode(EN_PIN, OUTPUT);
@@ -31,48 +82,22 @@ void setup() {
   driver.begin();
                                   
   driver.toff(5);                 // Enables driver in software
-  driver.rms_current(800);        // Set motor RMS current
+  driver.rms_current(1000);        // Set motor RMS current
       
 
   driver.en_spreadCycle(true);   // Toggle spreadCycle on TMC2208/2209/2224
   driver.pwm_autoscale(true);     // Needed for stealthChop
-
+  driver.microsteps(USTEPS); 
   
-  
+  step_pulse_gen.attach(0.001, update_motor_pos);
 }
 
-bool shaft = false;
-int microsteps[] = {1, 16, 32, 64, 128, 256};
 void loop() {
-  for (size_t ustep = 0; ustep < 6; ustep++)
+  if (Serial.available() > 0)
   {
-    driver.microsteps(microsteps[ustep]);    
-    
-
-    int step_period_us = 80;
-
-    for (int i = FULL_STEPS_PER_REV * microsteps[ustep]; i>0; i--) {
-      digitalWrite(STEP_PIN, HIGH);
-      delayMicroseconds(step_period_us);
-      digitalWrite(STEP_PIN, LOW);
-      delayMicroseconds(step_period_us);
-
-      yield(); //avoid the WDT
-      if (i % 1000 == 0)
-      {
-        Serial.printf("uSteps: %d ", microsteps[ustep]);
-        Serial.printf("i = %d out of %d\n", i, FULL_STEPS_PER_REV * microsteps[ustep]);
-      }
-      
-    }
-    shaft = !shaft;
-    //Serial.print("Shaft switched ");
-    //Serial.println(shaft);
-    driver.shaft(shaft);
-    //digitalWrite(DIR_PIN, shaft);
-    digitalWrite(LED_BUILTIN, shaft);
+    int val;
+    val = Serial.parseInt();
+    Serial.printf("New set point is: %d\n", val);
   }
-
   
-
 }
